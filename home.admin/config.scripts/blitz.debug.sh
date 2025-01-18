@@ -57,6 +57,7 @@ fi
 
 # load code software version
 source /home/admin/_version.info
+codeCommit=$(git -C /home/admin/raspiblitz rev-parse --short HEAD)
 
 ## get basic info (its OK if not set yet)
 source /home/admin/raspiblitz.info 2>/dev/null
@@ -84,6 +85,8 @@ echo "***************************************************************"
 echo "* RASPIBLITZ DEBUG LOGS "
 echo "***************************************************************"
 echo "blitzversion: ${codeVersion}"
+echo "commit-release: ${codeRelease}"
+echo "commit-active: ${codeCommit}"
 echo "chainnetwork: ${network} / ${chain}"
 uptime
 echo
@@ -432,6 +435,15 @@ else
   echo "- FINTS is OFF by config"
 fi
 
+if [ "${publicpool}" == "on" ]; then  
+  echo
+  echo "*** LAST 20 PUBLIPOOL LOGS ***"
+  echo "sudo journalctl -u publicpool -b --no-pager -n20"
+  sudo journalctl -u publicpool -b --no-pager -n20
+else
+  echo "- PUBLICPOOL is OFF by config"
+fi
+
 echo
 echo "*** MOUNTED DRIVES ***"
 echo "df -T -h"
@@ -464,7 +476,7 @@ sudo /home/admin/config.scripts/blitz.zram.sh status
 echo
 
 echo "*** HARDWARE TEST RESULTS ***"
-sudo vcgencmd get_throttled
+sudo vcgencmd get_throttled 2>/dev/null
 source <(/home/admin/_cache.sh get system_count_undervoltage)
 showImproveInfo=0
 if [ ${#system_count_undervoltage} -gt 0 ]; then

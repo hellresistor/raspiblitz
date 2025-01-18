@@ -35,17 +35,6 @@ elif [ -d /boot ]; then
 fi
 echo "# raspi_bootdir(${raspi_bootdir})"
 
-# install BTRFS if needed
-btrfsInstalled=$(btrfs --version 2>/dev/null | grep -c "btrfs-progs")
-if [ ${btrfsInstalled} -eq 0 ]; then
-  >&2 echo "# Installing BTRFS ..."
-  apt-get install -y btrfs-progs 1>/dev/null
-fi
-btrfsInstalled=$(btrfs --version 2>/dev/null | grep -c "btrfs-progs")
-if [ ${btrfsInstalled} -eq 0 ]; then
-  echo "error='missing btrfs package'"
-  exit 1
-fi
 
 # install smartmontools if needed
 smartmontoolsInstalled=$(apt-cache policy smartmontools | grep -c 'Installed: (none)' | grep -c "0")
@@ -66,13 +55,40 @@ fi
 # gathering system info
 # is global so that also other parts of this script can use this
 
+# check if a btrfs filesystem is available
 # basics
 isMounted=$(df | grep -c /mnt/hdd)
-isBTRFS=$(btrfs filesystem show 2>/dev/null| grep -c 'BLITZSTORAGE')
-isRaid=$(btrfs filesystem df /mnt/hdd 2>/dev/null | grep -c "Data, RAID1")
-isZFS=$(zfs list 2>/dev/null | grep -c "/mnt/hdd")
+isBTRFS="0"
+isRaid="0"
+isZFS="0"
 isSSD="0"
 isSMART="0"
+
+# BTRFS extras
+btrfsConnected=$(lsblk -f | grep -c btrfs)
+if [ ${btrfsConnected} -gt 0 ]; then
+
+  # install BTRFS if needed
+  btrfsInstalled=$(btrfs --version 2>/dev/null | grep -c "btrfs-progs")
+  if [ ${btrfsInstalled} -eq 0 ]; then
+    >&2 echo "# Installing BTRFS ..."
+    apt-get install -y btrfs-progs 1>/dev/null
+  fi
+  btrfsInstalled=$(btrfs --version 2>/dev/null | grep -c "btrfs-progs")
+  if [ ${btrfsInstalled} -eq 0 ]; then
+    echo "error='missing btrfs package'"
+    exit 1
+  fi
+  isBTRFS=$(btrfs filesystem show 2>/dev/null| grep -c 'BLITZSTORAGE')
+  isRaid=$(btrfs filesystem df /mnt/hdd 2>/dev/null | grep -c "Data, RAID1")
+
+fi
+
+# ZFS extras
+zfsConnected=$(lsblk -f | grep -c zfs)
+if [ ${zfsConnected} -gt 0 ]; then
+  isZFS=$(zfs list 2>/dev/null | grep -c "/mnt/hdd")
+fi
 
 # determine if swap is external on or not
 externalSwapPath="/mnt/hdd/swapfile"
@@ -218,7 +234,7 @@ if [ "$1" = "status" ]; then
     fi
 
     # try to detect if its an SSD
-    isSMART=$(sudo smartctl -a /dev/${hdd} | grep -c "Serial Number:")
+    isSMART=$(smartctl -a /dev/${hdd} | grep -c "Serial Number:")
     echo "isSMART=${isSMART}"
     isSSD=1
     isRotational=$(echo "${smartCtlA}" | grep -c "Rotation Rate:")
@@ -230,21 +246,29 @@ if [ "$1" = "status" ]; then
     echo "hddTemperature="
     echo "hddTemperatureStr='?°C'"
 
-    # display results from hdd & partition detection
-    echo "hddCandidate='${hdd}'"
     hddBytes=0
     hddGigaBytes=0
     if [ "${hdd}" != "" ]; then
       hddBytes=$(fdisk -l /dev/$hdd | grep GiB | cut -d " " -f 5)
       if [ "${hddBytes}" = "" ]; then
-	hddBytes=$(fdisk -l /dev/$hdd | grep TiB | cut -d " " -f 5)
+	      hddBytes=$(fdisk -l /dev/$hdd | grep TiB | cut -d " " -f 5)
       fi
       hddGigaBytes=$(echo "scale=0; ${hddBytes}/1024/1024/1024" | bc -l)
     fi
+
+    # check if big enough
+    if [ ${hddGigaBytes} -lt 130 ]; then
+      echo "# Found HDD '${hdd}' is smaller than 130GB"
+      hdd=""
+      hddDataPartition=""
+    fi
+
+    # display results from hdd & partition detection
+    echo "hddCandidate='${hdd}'"
     echo "hddBytes=${hddBytes}"
     echo "hddGigaBytes=${hddGigaBytes}"
     echo "hddPartitionCandidate='${hddDataPartition}'"
-    
+
     # if positive deliver more data
     if [ ${#hddDataPartition} -gt 0 ]; then
       # check partition size in bytes and GBs
@@ -458,7 +482,7 @@ if [ "$1" = "status" ]; then
     fi
     echo "hddRaspiVersion='${hddRaspiVersion}'"
 
-    smartCtlA=$(sudo smartctl -a /dev/${hdd} | tr -d '"')
+    smartCtlA=$(smartctl -a /dev/${hdd} | tr -d '"')
 
     # try to detect if its an SSD
     isSMART=$(echo "${smartCtlA}" | grep -c "Serial Number:")
@@ -648,6 +672,8 @@ if [ "$1" = "format" ]; then
   # check valid format
   if [ "$2" = "btrfs" ]; then
     >&2 echo "# DATA DRIVE - FORMATTING to BTRFS layout (new)"
+    # check if btrfs-tools are installed
+    apt-get install -y btrfs-progs 1>/dev/null
   elif [ "$2" = "ext4" ]; then
     >&2 echo "# DATA DRIVE - FORMATTING to EXT4 layout (old)"
   else
