@@ -45,14 +45,9 @@ echo "***********************************************" >> $logFile
 # list all running systemd services for future debug
 systemctl list-units --type=service --state=running >> $logFile
 
-# check if the file /etc/ssh/sshd_init_keys exists --> initial boot of fresh sd card image
-if [ -f "/etc/ssh/sshd_init_keys" ]; then
-  echo "# init SSH KEYS fresh for new user" >> $logFile
-  /home/admin/config.scripts/blitz.ssh.sh init >> $logFile
-else
-  echo "# make sure SSH server is configured & running" >> $logFile
-  /home/admin/config.scripts/blitz.ssh.sh checkrepair >> $logFile
-fi
+# make sure ssh is configured and running
+echo "# make sure SSH server is configured & running" >> $logFile
+/home/admin/config.scripts/blitz.ssh.sh checkrepair >> $logFile
 
 echo "## prepare raspiblitz temp" >> $logFile
 
@@ -86,6 +81,12 @@ ln_cl_mainnet_sync_initial_done=0
 ln_cl_testnet_sync_initial_done=0
 ln_cl_signet_sync_initial_done=0
 
+# detect VM
+vm=0
+if [ $(systemd-detect-virt) != "none" ]; then
+  vm=1
+fi
+
 # load already persisted valued (overwriting defaults if exist)
 source ${infoFile} 2>/dev/null
 
@@ -96,6 +97,7 @@ echo "setupPhase=${setupPhase}" >> $infoFile
 echo "setupStep=${setupStep}" >> $infoFile
 echo "baseimage=${baseimage}" >> $infoFile
 echo "cpu=${cpu}" >> $infoFile
+echo "vm=${vm}" >> $infoFile
 echo "blitzapi=${blitzapi}" >> $infoFile
 echo "displayClass=${displayClass}" >> $infoFile
 echo "displayType=${displayType}" >> $infoFile
@@ -130,13 +132,26 @@ echo "# raspi_bootdir(${raspi_bootdir})" >> $logFile
 # when a file 'stop' is on the sd card bootfs partition root - stop for manual provision
 flagExists=$(ls ${raspi_bootdir}/stop 2>/dev/null | grep -c 'stop')
 if [ "${flagExists}" == "1" ]; then
-  # set state info
+  localip=$(hostname -I | awk '{print $1}')
   /home/admin/_cache.sh set state "stop"
-  /home/admin/_cache.sh set message "stopped for manual provision"
+  /home/admin/_cache.sh set message "stopped for manual provision ${localip}"
   systemctl stop background.service
   systemctl stop background.scan.service
   # log info
   echo "INFO: 'bootstrap stopped - run command release after manual provison to remove stop flag" >> ${logFile}
+  exit 0
+fi
+
+# VM stop signal for manual provision - when an audio device is detected on a VM
+flagExists=$(lspci | grep -c "Audio")
+if [ "${vm}" == "1"  ] && [ ${flagExists} -gt 0 ]; then
+  localip=$(hostname -I | awk '{print $1}')
+  /home/admin/_cache.sh set state "stop"
+  /home/admin/_cache.sh set message "VM stopped for manual provision"
+  systemctl stop background.service
+  systemctl stop background.scan.service
+  # log info
+  echo "INFO: 'bootstrap stopped - remove the audio device from the VM" >> ${logFile}
   exit 0
 fi
 
@@ -284,7 +299,6 @@ source <(/home/admin/config.scripts/blitz.datadrive.sh status)
 ################################
 
 echo "Waiting for HDD/SSD ..." >> $logFile
-ls -la /etc/ssh >> $logFile 
 until [ ${isMounted} -eq 1 ] || [ ${#hddCandidate} -gt 0 ]
 do
 
@@ -548,13 +562,15 @@ if [ "${baseimage}" == "raspios_arm64" ]; then
   isRaspberryPi5=$(cat /proc/device-tree/model 2>/dev/null | grep -c "Raspberry Pi 5")
   firmwareBuildNumber=$(rpi-eeprom-update | grep "CURRENT" | cut -d "(" -f2 | sed 's/[^0-9]*//g')
   echo "checking Firmware: isRaspberryPi5(${isRaspberryPi5}) firmwareBuildNumber(${firmwareBuildNumber})" >> $logFile
-  if [ ${isRaspberryPi5} -gt 0 ] && [ ${firmwareBuildNumber} -lt 1701887365 ]; then
-    echo "RaspberryPi 5 detected with old firmware ... do update." >> $logFile
+  if [ ${isRaspberryPi5} -gt 0 ] && [ ${firmwareBuildNumber} -lt 1708097321 ]; then # Fri 16 Feb 15:28:41 UTC 2024 (1708097321)
+    echo "updating Firmware" >> $logFile
+    echo "RaspberryPi 5 detected with old firmware (${firmwareBuildNumber}) ... do update." >> $logFile
     apt-get update -y
     apt-get upgrade -y
     apt-get install -y rpi-eeprom
     rpi-eeprom-update -a
     echo "Restarting ..." >> $logFile
+    sleep 3
     reboot
   else
     echo "RaspberryPi Firmware not in th need of update." >> $logFile
@@ -883,7 +899,7 @@ if [ ${isMounted} -eq 0 ]; then
   # Set Password A (in all cases)
   
   if [ "${passwordA}" == "" ]; then
-    /home/admin/config.scripts/blitz.error.sh _bootstrap.sh "missing-passworda" "missing passwordA in (${setupFile})" "" ${logFile}
+    /home/admin/config.scripts/blitz.error.sh _bootstrap.sh "missing-passworda-2" "missing passwordA(2) in (${setupFile})" "" ${logFile}
     exit 1
   fi
 
@@ -1017,7 +1033,6 @@ if [ ${isMounted} -eq 0 ]; then
 
   # system has to wait before reboot to present like seed words and other info/options to user
   echo "BOOTSTRAP EXIT ... waiting for final setup controller to initiate final reboot." >> $logFile
-  echo "------------> You may login thru web browser to continue setup." >> $logFile
   exit 1
 
 else
